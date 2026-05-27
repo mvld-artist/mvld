@@ -1,160 +1,29 @@
-# app.py
-
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError
 
-# ---------------------------------
+# 1. 페이지 설정 및 제목
+st.set_page_config(page_title="Music Critic AI", page_icon="🎵", layout="centered")
+st.title("🎵 음악 평론 챗봇: Critic AI")
+st.caption("Pitchfork, Rate Your Music, 리드머, 온음 등의 스타일로 앨범을 깊이 있게 평론합니다.")
 
-# 페이지 설정
-
-# ---------------------------------
-
-st.set_page_config(
-page_title="AI 음악 평론 챗봇",
-page_icon="🎵"
-)
-
-st.title("🎵 AI 음악 평론 챗봇")
-st.caption("Pitchfork / 리드머 / IZM 감성 기반")
-
-# ---------------------------------
-
-# API KEY
-
-# ---------------------------------
-
+# 2. Streamlit Secrets에서 API 키 불러오기 및 클라이언트 초기화
 try:
-api_key = st.secrets["GEMINI_API_KEY"]
-genai.configure(api_key=api_key)
-except Exception as e:
-st.error("Secrets 설정 오류")
-st.stop()
+    # Streamlit Cloud 환경 또는 local의 .streamlit/secrets.toml에서 키를 가져옵니다.
+    api_key = st.secrets["GEMINI_API_KEY"]
+    client = genai.Client(api_key=api_key)
+except KeyError:
+    st.error("API 키를 찾을 수 없습니다. Streamlit Secrets에 'GEMINI_API_KEY'를 설정해주세요.")
+    st.stop()
 
-# ---------------------------------
-
-# 모델 설정
-
-# ---------------------------------
-
-MODEL_NAME = "gemini-2.5-flash-lite"
-
-try:
-model = genai.GenerativeModel(MODEL_NAME)
-except Exception as e:
-st.error(f"모델 로딩 실패: {e}")
-st.stop()
-
-# ---------------------------------
-
-# 시스템 프롬프트
-
-# ---------------------------------
-
-SYSTEM_PROMPT = """
-너는 전문 음악 평론가다.
-
-스타일 참고:
-
-* Pitchfork
-* 리드머
-* IZM
-* 온음
-* RYM
-
-답변 규칙:
-
-1. 장르 분석 포함
-2. 믹싱/사운드 설명
-3. 감정선 설명
-4. 단순 칭찬 금지
-5. 필요하면 비판 가능
-6. 평점은 10점 만점
-   """
-
-# ---------------------------------
-
-# 채팅 기록
-
-# ---------------------------------
-
+# 3. 세션 상태(Session State) 초기화 (채팅 기록 및 대화 객체 유지)
 if "messages" not in st.session_state:
-st.session_state.messages = []
+    st.session_state.messages = []
 
-# 이전 메시지 출력
-
-for message in st.session_state.messages:
-with st.chat_message(message["role"]):
-st.markdown(message["content"])
-
-# ---------------------------------
-
-# 입력창
-
-# ---------------------------------
-
-user_input = st.chat_input("앨범, 곡, 아티스트 입력")
-
-if user_input:
-
-```
-# 사용자 메시지 저장
-st.session_state.messages.append({
-    "role": "user",
-    "content": user_input
-})
-
-# 사용자 메시지 출력
-with st.chat_message("user"):
-    st.markdown(user_input)
-
-# 대화 합치기
-conversation = SYSTEM_PROMPT + "\n\n"
-
-for msg in st.session_state.messages:
-    role = "사용자" if msg["role"] == "user" else "평론가"
-    conversation += f"{role}: {msg['content']}\n"
-
-# AI 응답
-try:
-    with st.chat_message("assistant"):
-
-        with st.spinner("평론 작성 중..."):
-
-            response = model.generate_content(
-                conversation,
-                generation_config={
-                    "temperature": 0.9,
-                    "max_output_tokens": 1000,
-                    "top_p": 0.95
-                }
-            )
-
-            # 응답 안전 처리
-            ai_response = ""
-
-            if hasattr(response, "text"):
-                ai_response = response.text
-            else:
-                ai_response = "응답 생성 실패"
-
-            st.markdown(ai_response)
-
-            # 저장
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": ai_response
-            })
-
-except Exception as e:
-
-    error_msg = f"""
-```
-
-오류 발생:
-
-{str(e)}
-"""
-
-```
-    st.error(error_msg)
-```
+if "chat_session" not in st.session_state:
+    # 챗봇의 페르소나를 부여하는 시스템 지침(System Instruction) 설정
+    system_instruction = (
+        "당신은 전 세계의 다양한 음악 평론 매체(Pitchfork, Rate Your Music(RYM), 리드머, 온음, IZM, ResMusica 등)의 "
+        "장점을 흡수한 전문 음악 평론가입니다. 사용자가 특정 앨범이나 아티스트, 곡을 언급하면 다음과 같은 원칙으로 평론을 진행하세요.\n\n"
+        "1. **전문성과 깊이**:
