@@ -1,85 +1,67 @@
 import streamlit as st
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
+import google.generativeai as genai
 
 # 1. 페이지 설정 및 제목
-st.set_page_config(page_title="Music Critic AI", page_icon="🎵", layout="centered")
-st.title("🎵 음악 평론 챗봇: Critic AI")
-st.caption("Pitchfork, Rate Your Music, 리드머, 온음 등의 스타일로 앨범을 깊이 있게 평론합니다.")
+st.set_page_config(page_title="🎧 무드&비트 음악 평론 챗봇", page_icon="🎵")
+st.title("🎧 무드&비트 음악 평론 챗봇")
+st.caption("피치포크, 리드머, 이즘, RYM 스타일의 깊이 있는 음악 평론을 제공합니다.")
 
-# 2. Streamlit Secrets에서 API 키 불러오기 및 클라이언트 초기화
-try:
-    # Streamlit Cloud 환경 또는 local의 .streamlit/secrets.toml에서 키를 가져옵니다.
-    api_key = st.secrets["GEMINI_API_KEY"]
-    client = genai.Client(api_key=api_key)
-except KeyError:
-    st.error("API 키를 찾을 수 없습니다. Streamlit Secrets에 'GEMINI_API_KEY'를 설정해주세요.")
+# 2. Streamlit Secrets에서 API 키 불러오기 및 설정
+if "GEMINI_API_KEY" not in st.secrets:
+    st.error("지정된 GEMINI_API_KEY를 Secrets에서 찾을 수 없습니다. 설정 확인이 필요합니다.")
     st.stop()
 
-# 3. 세션 상태(Session State) 초기화 (채팅 기록 및 대화 객체 유지)
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+
+# 3. 세션 상태(Chat History 및 Gemini Chat 세션) 초기화
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "chat_session" not in st.session_state:
-    # 챗봇의 페르소나를 부여하는 시스템 지침(System Instruction) 설정
+# 가장 중요: 닫히지 않는 공식 Gemini Chat 세션을 Streamlit 세션에 저장
+if "gemini_chat" not in st.session_state:
     system_instruction = (
-        "당신은 전 세계의 다양한 음악 평론 매체(Pitchfork, Rate Your Music(RYM), 리드머, 온음, IZM, ResMusica 등)의 "
-        "장점을 흡수한 전문 음악 평론가입니다. 사용자가 특정 앨범이나 아티스트, 곡을 언급하면 다음과 같은 원칙으로 평론을 진행하세요.\n\n"
-        "1. **전문성과 깊이**: 단순히 '좋다/나쁘다'를 넘어 사운드 엔지니어링, 프로덕션, 노랫말의 서사, 음악사적 맥락을 짚어내세요.\n"
-        "2. **비평적 시각**: 무조건적인 찬양은 지양하며, 아쉬운 점이나 한계도 날카롭게 지적하세요.\n"
-        "3. **매체별 스타일 융합**: Pitchfork 특유의 세련되고 힙한 분석, RYM의 장르적 마니아성, 리드머/온음 등 국내 평론지의 텍스트적 깊이를 조합하세요.\n"
-        "4. **가상의 평점 제공**: 평론 마지막에는 해당 앨범에 대한 가상의 평점(10점 만점 또는 별점 5점 만점)과 한 줄 평을 반드시 포함하세요."
+        "당신은 피치포크(Pitchfork), 온음, 리드머, 이즘(IZM), ResMusica, Rate Your Music(RYM), Overtone 등 "
+        "국내외 유수의 음악 매체 스타일을 꿰뚫고 있는 전문 음악 평론가입니다. "
+        "사용자가 음악, 앨범, 아티스트에 대해 물어보면 단순히 정보를 나열하는 것을 넘어, "
+        "사운드적 특징, 문화적 맥락, 앨범의 서사적 구조, 프로덕션을 날카롭고 유려한 문체로 평론해주세요. "
+        "피치포크식 소수점 평점이나 리드머식 별점 등을 덧붙여도 좋습니다."
     )
-    
-    # gemini-2.5-flash-lite 모델로 대화 세션 시작
-    try:
-        st.session_state.chat_session = client.chats.create(
-            model="gemini-2.5-flash-lite",
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.7,
-            )
-        )
-    except Exception as e:
-        st.error(#요류 발생 시 메시지
-            f"Gemini 모델 초기화 중 오류가 발생했습니다: {e}"
-        )
-        st.stop()
+    # 모델 선언 및 채팅 세션 시작 (system_instruction 주입)
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash-lite",
+        system_instruction=system_instruction
+    )
+    # 한 번 연결하면 계속 유지되는 대화방(chat)을 생성합니다.
+    st.session_state.gemini_chat = model.start_chat(history=[])
 
-# 4. 기존 채팅 기록 표시
+# 4. 이전 대화 기록 화면에 출력
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
 # 5. 사용자 입력 처리
-if user_input := st.chat_input("평론을 원하는 앨범이나 아티스트를 입력하세요. (예: 켄드릭 라마 - To Pimp a Butterfly)"):
-    # 사용자 메시지 화면에 표시 및 세션 저장
+if user_input := st.chat_input("아티스트, 앨범, 혹은 곡 이름을 입력하고 평론을 요청해보세요!"):
+    
+    # 사용자 메시지 화면 표시 및 저장
     with st.chat_message("user"):
         st.markdown(user_input)
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-    # 챗봇 답변 생성 및 에러 처리
+    # 6. Gemini 모델 호출 및 답변 생성
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
-        message_placeholder.markdown("🎵 앨범을 분석하고 평론을 작성하는 중입니다...")
         
         try:
-            # API 호출
-            response = st.session_state.chat_session.send_message(user_input)
-            full_response = response.text
-            
-            # 결과 출력 및 세션 저장
+            with st.spinner("평론가가 대상을 분석 중입니다... ✍️"):
+                # 기존의 복잡한 변환 없이, 유지되고 있는 세션에 메시지만 새로 보냅니다.
+                response = st.session_state.gemini_chat.send_message(user_input)
+                full_response = response.text
+                
+            # 결과 출력 및 저장
             message_placeholder.markdown(full_response)
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             
-        except APIError as e:
-            # Gemini API 관련 에러 처리
-            error_msg = f"Gemini API 오류가 발생했습니다: {e.message}"
-            message_placeholder.markdown(error_msg)
-            st.error(error_msg)
         except Exception as e:
-            # 기타 일반 에러 처리
-            error_msg = f"알 수 없는 오류가 발생했습니다: {str(e)}"
-            message_placeholder.markdown(error_msg)
-            st.error(error_msg)
+            # 오류 처리 및 상세 내용 출력
+            error_msg = f"❌ 오류가 발생했습니다: {str(e)}\n\n문제가 지속되면 새로고침(F5) 후 다시 시도해 주세요."
+            message_placeholder.error(error_msg)
